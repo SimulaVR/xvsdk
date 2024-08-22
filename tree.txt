@@ -1,0 +1,29 @@
+nixos:/home/george/nix-expressions/xvisio
+$ pwd
+/home/george/nix-expressions/xvisio
+
+$ ls -tlra
+total 11M
+-rwxr-xr-x  1 george users 1M Aug  1 15:13 99-xvisio.rules
+-rwxr-xr-x  1 george users 8M Aug  1 15:23 xvsdk_3.2.0-20230907_focal_amd64.deb
+-rwxr-xr-x  1 george users 1M Aug  1 15:24 sgbm_demo
+-rw-r--r--  1 george users 1M Aug  1 16:12 default.nix
+-rw-r--r--  1 george users 1M Aug  1 18:25 octomap-1.9.nix
+drwxr-xr-x 16 george users 1M Aug  6 18:42 opencv-4.2
+-rw-r--r--  1 george users 1M Aug 19 19:29 xvsdk_deb_tree.txt
+-rw-r--r--  1 george users 3M Aug 19 19:29 Xvisio_SDK_Guide_EH.pdf
+-rw-r--r--  1 george users 1M Aug 19 20:18 Xvisio_SDK_Guide_EH.md
+-rw-r--r--  1 george users 1M Aug 20 14:53 xvsdk_code.txt
+-rwxr-xr-x  1 george users 1M Aug 20 16:54 xv_sample_program
+-rw-r--r--  1 george users 1M Aug 20 16:54 XR501G10002222006309.xvcd
+drwxr-xr-x 10 george users 1M Aug 20 22:05 ..
+-rw-r--r--  1 george users 1M Aug 21 08:59 xv_sample_program_c.c
+-rw-r--r--  1 george users 1M Aug 21 08:59 xv_sample_program_cpp.cpp
+-rw-r--r--  1 george users 1M Aug 21 09:02 shell-xv_sample_program.nix
+-rw-r--r--  1 george users 1M Aug 21 09:12 xv_c_wrapper.cpp
+-rw-r--r--  1 george users 1M Aug 21 09:12 xv_c_wrapper.h
+lrwxrwxrwx  1 george users 1M Aug 21 10:36 result -> /nix/store/1j0ga646fgamzbvyxivkdy0vz9d1qg1s-xvsdk-3.2.0-20230907
+-rw-r--r--  1 george users 1M Aug 21 10:37 main.cpp
+-rw-r--r--  1 george users 1M Aug 21 10:46 xvsdk.nix
+drwxr-xr-x  3 george users 1M Aug 21 11:33 .
+
