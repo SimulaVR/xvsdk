@@ -97,7 +97,7 @@ g++ -std=c++11 -shared -fPIC \
   -Wl,-rpath,$out/lib:$out/lib/opencv4.2:${octomap}/lib:${libusb1}/lib:${libjpeg8}/lib
 
 
-    cp ${./xv_c_wrapper.h} $out/include/
+    cp ${./xv_c_wrapper.h} $out/include/xv_c_wrapper.h
   '';
 
   postFixup = ''
