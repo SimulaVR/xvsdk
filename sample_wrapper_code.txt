@@ -1,0 +1,878 @@
+Project Path: xvisio
+
+Source Tree:
+
+```
+xvisio
+├── xv_c_wrapper.cpp
+├── Xvisio_SDK_Guide_EH.md
+├── default.nix
+├── xvsdk_deb_tree.txt
+├── sgbm_demo
+├── result
+├── octomap-1.9.nix
+├── 99-xvisio.rules
+├── xv_sample_program_cpp.cpp
+├── xv_c_wrapper.h
+├── XR501G10002222006309.xvcd
+├── backups
+│   ├── imu-start-stop-xv_c_wrapper.h
+│   ├── imu-start-stop-xv_sample_program_c.c
+│   └── imu-start-stop-xv_c_wrapper.cpp
+├── xvsdk_3.2.0-20230907_focal_amd64.deb
+├── Xvisio_SDK_Guide_EH.pdf
+├── xv_sample_program_c.c
+├── shell-xv_sample_program.nix
+├── xvsdk.nix
+├── sample_wrapper_code.txt
+├── tree.txt
+├── main.cpp
+├── xvsdk_code.txt
+└── xv_sample_program_c
+
+```
+
+`/home/george/nix-expressions/xvisio/xv_c_wrapper.cpp`:
+
+```cpp
+#include <cstdint>
+#include <xv-sdk.h>
+#include <xv-sdk-ex.h>  // Add this for DeviceEx and StereoMode
+#include <cstring>
+#include <chrono>
+#include <thread>
+#include "xv_c_wrapper.h"
+
+extern "C" {
+
+//Initialize global variables (ugly but for demo)
+static OrientationCallback g_orientation_callback = nullptr;
+static PoseCallback g_pose_callback = nullptr;
+static xv::Device* g_device = nullptr;
+static std::shared_ptr<xv::Slam> g_slam;
+static int g_imu_callback_id = -1;
+static int g_fisheye_callback_id = -1;
+static std::thread g_pose_thread;
+static bool g_stop_pose_thread = false;
+
+//Pushes to our C orientation callbackfunction
+void cpp_orientation_callback(const xv::Orientation& orientation) {
+    if (g_orientation_callback) {
+        C_Orientation c_orientation;
+        c_orientation.hostTimestamp = orientation.hostTimestamp;
+        c_orientation.edgeTimestampUs = orientation.edgeTimestampUs;
+        
+        auto q = orientation.quaternion();
+        memcpy(c_orientation.quaternion, q.data(), sizeof(double) * 4);
+        
+        g_orientation_callback(&c_orientation);
+    }
+}
+
+//Pushes to our C 6dof callback function
+void cpp_pose_polling_function(std::shared_ptr<xv::Slam> slam) {
+    const double prediction = 0.005;
+    xv::Pose pose;
+    long n = 0;
+    long nb_ok = 0;
+
+    while (!g_stop_pose_thread) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+
+        bool ok = slam->getPose(pose, prediction);
+        if (ok) {
+            ++nb_ok;
+            if (g_pose_callback && pose.confidence() > 0) {
+                C_Pose c_pose;
+                c_pose.hostTimestamp = pose.hostTimestamp();
+                c_pose.edgeTimestampUs = pose.edgeTimestampUs();
+                
+                auto pos = pose.translation();
+                memcpy(c_pose.position, pos.data(), sizeof(double) * 3);
+                
+                auto q = pose.quaternion();
+                memcpy(c_pose.quaternion, q.data(), sizeof(double) * 4);
+                
+                c_pose.confidence = pose.confidence();
+                
+                auto linVel = pose.linearVelocity();
+                memcpy(c_pose.linearVelocity, linVel.data(), sizeof(double) * 3);
+                
+                auto angVel = pose.angularVelocity();
+                memcpy(c_pose.angularVelocity, angVel.data(), sizeof(double) * 3);
+                
+                g_pose_callback(&c_pose);
+            }
+        }
+        n++;
+
+        if (n % 1000 == 0) {
+            printf("SLAM pose success rate: %.1f%% (%ld/%ld)\n", 
+                   100.0 * double(nb_ok) / n, nb_ok, n);
+        }
+    }
+}
+
+const char* xv_init_and_start_imu(OrientationCallback callback) {
+    printf("Initializing with SlamStartMode::Normal...\n");
+    auto devices = xv::getDevices(10.0, "", nullptr, xv::SlamStartMode::Normal);
+    if (devices.empty()) {
+        printf("No devices found\n");
+        return nullptr;
+    }
+
+    g_device = devices.begin()->second.get();
+    printf("Device found with ID: %s\n", g_device->id().c_str());
+    
+    // Validate device capabilities
+    if (!g_device->slam()) {
+        printf("Error: SLAM not supported on this device\n");
+        return nullptr;
+    }
+
+    xv::setLogLevel(xv::LogLevel(1));
+
+    printf("Starting orientation stream...\n");
+    if (!g_device->orientationStream()->start()) {
+        printf("Error: Failed to start orientation stream\n");
+        return nullptr;
+    }
+
+    // Register orientation callback
+    g_orientation_callback = callback;
+    g_imu_callback_id = g_device->orientationStream()->registerCallback(cpp_orientation_callback);
+
+    static std::string device_id = g_device->id();
+    return device_id.c_str();
+}
+
+//Includes bits from the xv_init_and_start_imu (unlike demo-api, which just crashes if you try to do this first)
+const char* xv_init_and_start_slam(PoseCallback callback) {
+    printf("Initializing with SlamStartMode::Normal...\n");
+    auto devices = xv::getDevices(10.0, "", nullptr, xv::SlamStartMode::Normal);
+    if (devices.empty()) {
+        printf("No devices found\n");
+        return nullptr;
+    }
+
+    g_device = devices.begin()->second.get();
+    printf("Device found with ID: %s\n", g_device->id().c_str());
+    
+
+    // Get SLAM interface
+    g_slam = g_device->slam();
+    if (!g_slam) {
+        printf("Error: Failed to get SLAM interface\n");
+        return nullptr;
+    }
+
+    xv::setLogLevel(xv::LogLevel(1));
+
+    //Orientation-only code which might also be needed
+    // for this function to work (due to XR50 xrvsdk
+    // internals I don't understand).
+    /*
+    printf("Starting orientation stream...\n");
+    if (!g_device->orientationStream()->start()) {
+        printf("Error: Failed to start orientation stream\n");
+        return nullptr;
+    }
+    g_orientation_callback = callback;
+    g_imu_callback_id = g_device->orientationStream()->registerCallback(cpp_orientation_callback);
+    static std::string device_id = g_device->id();
+    return device_id.c_str();
+    
+    //If you use the above, you'll also need to tear it down:
+    g_device->orientationStream()->unregisterCallback(g_imu_callback_id);
+    g_imu_callback_id = -1;
+    */
+    g_fisheye_callback_id = g_device->fisheyeCameras()->registerCallback([](xv::FisheyeImages const& images) {});
+    printf("Starting fisheye cameras...\n");
+    if (!g_device->fisheyeCameras()->start()) {
+        printf("Warning: Failed to start fisheye cameras\n");
+    }
+
+    //TODO: See if you can get pure Edge Mode to work
+    if (!g_slam->start(xv::Slam::Mode::Mixed)) {
+        printf("Error: Failed to start SLAM in any mode\n");
+        return nullptr;
+    }
+
+    printf("Configuring SLAM...\n");
+
+    // Give some time for initialization
+    // TODO: See how low we can make this
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+
+    // Setup pose callback and start pose thread
+    g_pose_callback = callback;
+    g_stop_pose_thread = false;
+    g_pose_thread = std::thread(cpp_pose_polling_function, g_slam);
+
+    static std::string device_id = g_device->id();
+    return device_id.c_str();
+}
+
+void xv_cleanup() {
+    // Stop pose thread if running
+    if (g_pose_thread.joinable()) {
+        g_stop_pose_thread = true;
+        g_pose_thread.join();
+    }
+
+    // Cleanup SLAM
+    if (g_slam) {
+        g_slam->stop();
+    }
+
+    // Cleanup callbacks
+    if (g_device) {
+        if (g_device->orientationStream()) {
+            g_device->orientationStream()->unregisterCallback(g_imu_callback_id);
+        }
+        if (g_device->fisheyeCameras()) {
+            g_device->fisheyeCameras()->unregisterCallback(g_fisheye_callback_id);
+        }
+    }
+
+    // Clean up ugly global state vars
+    g_device = nullptr;
+    g_slam.reset();
+    g_orientation_callback = nullptr;
+    g_pose_callback = nullptr;
+}
+
+}
+```
+
+`/home/george/nix-expressions/xvisio/xv_sample_program_cpp.cpp`:
+
+```cpp
+#include <iostream>
+#include <chrono>
+#include <thread>
+#include <iomanip>
+#include <xv-sdk.h>
+
+double lastTimestamp = 0.0;
+
+void orientationCallback(const xv::Orientation& orientation) {
+    auto now = std::chrono::system_clock::now();
+    auto now_c = std::chrono::system_clock::to_time_t(now);
+    std::cout << std::put_time(std::localtime(&now_c), "%Y-%m-%d %H:%M:%S") 
+              << " orientation@" 
+              << std::fixed << std::setprecision(0) << 1.0 / (orientation.hostTimestamp - lastTimestamp) * 1e6 << "fps "
+              << "3dof=(" 
+              << std::setprecision(6)
+              << orientation.quaternion()[0] << " "
+              << orientation.quaternion()[1] << " "
+              << orientation.quaternion()[2] << " "
+              << orientation.quaternion()[3] << ")," << std::endl;
+    lastTimestamp = orientation.hostTimestamp;
+}
+
+int main() {
+    std::cout << "XVisio SDK Sample Program (C++ version)" << std::endl;
+
+    auto devices = xv::getDevices();
+    if (devices.empty()) {
+        std::cerr << "No XVisio devices found." << std::endl;
+        return 1;
+    }
+
+    auto device = devices.begin()->second;
+    std::cout << "Device found: " << device->id() << std::endl;
+
+    auto orientationStream = device->orientationStream();
+    if (!orientationStream) {
+        std::cerr << "Orientation stream not supported on this device." << std::endl;
+        return 1;
+    }
+
+    if (!orientationStream->start()) {
+        std::cerr << "Failed to start orientation stream." << std::endl;
+        return 1;
+    }
+
+    orientationStream->registerCallback(orientationCallback);
+
+    std::cout << "Orientation stream started. Press Ctrl+C to exit." << std::endl;
+
+    while (true) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+
+    return 0;
+}
+
+```
+
+`/home/george/nix-expressions/xvisio/xv_c_wrapper.h`:
+
+```h
+#ifndef XV_C_WRAPPER_H
+#define XV_C_WRAPPER_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#include <stdint.h>
+#include <stdbool.h>
+
+  // Struct for orientation/IMU data
+  typedef struct {
+    double hostTimestamp;
+    int64_t edgeTimestampUs;
+    double quaternion[4];
+  } C_Orientation;
+
+  typedef struct {
+    double hostTimestamp;
+    int64_t edgeTimestampUs;
+    double position[3];
+    double quaternion[4];
+    double confidence;
+    double linearVelocity[3];
+    double angularVelocity[3];
+  } C_Pose;
+
+  typedef void (*OrientationCallback)(const C_Orientation*);
+  typedef void (*PoseCallback)(const C_Pose*);
+
+  const char* xv_init_and_start_imu(OrientationCallback callback);
+  const char* xv_init_and_start_slam(PoseCallback callback);
+
+  void xv_cleanup(void);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
+```
+
+`/home/george/nix-expressions/xvisio/backups/imu-start-stop-xv_c_wrapper.h`:
+
+```h
+#ifndef XV_C_WRAPPER_H
+#define XV_C_WRAPPER_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#include <stdint.h>
+#include <stdbool.h>
+
+  // Struct for orientation/IMU data
+  typedef struct {
+    double hostTimestamp;
+    int64_t edgeTimestampUs;
+    double quaternion[4];  // [qx, qy, qz, qw]
+  } C_Orientation;
+
+  typedef struct {
+    double hostTimestamp;
+    int64_t edgeTimestampUs;
+    double position[3];
+    double quaternion[4];
+    double confidence;
+    double linearVelocity[3];
+    double angularVelocity[3];
+  } C_Pose;
+
+  // Callback function types
+  typedef void (*OrientationCallback)(const C_Orientation*);
+  typedef void (*PoseCallback)(const C_Pose*);
+
+  // Initialize device and start IMU stream
+  const char* xv_init_and_start_imu(OrientationCallback callback);
+
+  // Stop IMU and start SLAM
+  bool xv_stop_imu_start_slam(PoseCallback callback);
+
+  // Cleanup
+  void xv_cleanup(void);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // XV_C_WRAPPER_H
+```
+
+`/home/george/nix-expressions/xvisio/backups/imu-start-stop-xv_sample_program_c.c`:
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <time.h>
+#include <signal.h>
+#include <math.h>
+#include "xv_c_wrapper.h"
+
+static volatile int running = 1;
+
+void print_timestamp() {
+    time_t now;
+    time(&now);
+    struct tm *local = localtime(&now);
+    printf("%04d-%02d-%02d %02d:%02d:%02d ", 
+           local->tm_year + 1900, local->tm_mon + 1, local->tm_mday,
+           local->tm_hour, local->tm_min, local->tm_sec);
+}
+
+
+void orientation_callback(const C_Orientation* orientation) {
+    static double last_orientation_timestamp = 0.0;
+    double fps = 0.0;
+    if (last_orientation_timestamp > 0.0) {
+        double dt = orientation->hostTimestamp - last_orientation_timestamp;
+        if (dt > 0) fps = 1.0 / dt;
+    }
+    
+    print_timestamp();
+    printf("orientation@%.1ffps 3dof=(%f %f %f %f)\n",
+           fps,
+           orientation->quaternion[0], 
+           orientation->quaternion[1],
+           orientation->quaternion[2], 
+           orientation->quaternion[3]);
+    
+    last_orientation_timestamp = orientation->hostTimestamp;
+}
+
+void pose_callback(const C_Pose* pose) {
+    static double last_pose_timestamp = 0.0;
+    printf("pose callback called");
+    double fps = 0.0;
+    if (last_pose_timestamp > 0.0) {
+        double dt = pose->hostTimestamp - last_pose_timestamp;
+        if (dt > 0) fps = 1.0 / dt;
+    }
+    
+    // Convert quaternion to pitch, yaw, roll (approx)
+    // Note: This is a simplified conversion - you might want to implement
+    // a more accurate conversion matching the demo's rotationToPitchYawRoll
+    double pitch = asin(2.0 * (pose->quaternion[3] * pose->quaternion[1] - pose->quaternion[2] * pose->quaternion[0])) * 180.0 / M_PI;
+    double yaw = atan2(2.0 * (pose->quaternion[3] * pose->quaternion[2] + pose->quaternion[0] * pose->quaternion[1]), 
+                      1.0 - 2.0 * (pose->quaternion[1] * pose->quaternion[1] + pose->quaternion[2] * pose->quaternion[2])) * 180.0 / M_PI;
+    double roll = atan2(2.0 * (pose->quaternion[3] * pose->quaternion[0] + pose->quaternion[1] * pose->quaternion[2]), 
+                       1.0 - 2.0 * (pose->quaternion[0] * pose->quaternion[0] + pose->quaternion[1] * pose->quaternion[1])) * 180.0 / M_PI;
+    
+    print_timestamp();
+    printf("slam-get-pose p=(%f,%f,%f,%f,%f,%f), Confidence=%f\n",
+           pose->position[0], pose->position[1], pose->position[2],
+           pitch, yaw, roll,
+           pose->confidence);
+    
+    last_pose_timestamp = pose->hostTimestamp;
+}
+
+void sigint_handler(int sig) {
+    running = 0;
+}
+
+int main() {
+    signal(SIGINT, sigint_handler);
+    
+    printf("XVisio SDK Sample Program (C version)\n");
+    
+    // Step 1: Initialize and start IMU
+    printf("Initializing device and starting IMU stream...\n");
+    const char* device_id = xv_init_and_start_imu(orientation_callback);
+    if (device_id == NULL) {
+        printf("Failed to initialize device and start IMU\n");
+        return 1;
+    }
+    
+    printf("Device initialized: %s\n", device_id);
+    printf("IMU stream active. Collecting orientation data for 2 seconds...\n");
+    
+    // Collect IMU data for 5 seconds
+    sleep(2);
+    
+    // Step 2: Switch to SLAM
+    printf("\nStopping IMU and starting SLAM...\n");
+    if (!xv_stop_imu_start_slam(pose_callback)) {
+        printf("Failed to start SLAM\n");
+        xv_cleanup();
+        return 1;
+    }
+    
+    printf("SLAM running. Press Ctrl+C to exit.\n");
+    
+    while (running) {
+        usleep(100000);
+    }
+    
+    printf("\nCleaning up...\n");
+    xv_cleanup();
+    printf("Done.\n");
+    
+    return 0;
+}
+```
+
+`/home/george/nix-expressions/xvisio/backups/imu-start-stop-xv_c_wrapper.cpp`:
+
+```cpp
+#include <cstdint>
+#include <xv-sdk.h>
+#include <xv-sdk-ex.h>  // Add this for DeviceEx and StereoMode
+#include <cstring>
+#include <chrono>
+#include <thread>
+#include "xv_c_wrapper.h"
+
+extern "C" {
+
+static OrientationCallback g_orientation_callback = nullptr;
+static PoseCallback g_pose_callback = nullptr;
+static xv::Device* g_device = nullptr;
+static std::shared_ptr<xv::Slam> g_slam;
+static int g_imu_callback_id = -1;
+static int g_fisheye_callback_id = -1;
+static std::thread g_pose_thread;
+static bool g_stop_pose_thread = false;
+
+void cpp_orientation_callback(const xv::Orientation& orientation) {
+    if (g_orientation_callback) {
+        C_Orientation c_orientation;
+        c_orientation.hostTimestamp = orientation.hostTimestamp;
+        c_orientation.edgeTimestampUs = orientation.edgeTimestampUs;
+        
+        auto q = orientation.quaternion();
+        memcpy(c_orientation.quaternion, q.data(), sizeof(double) * 4);
+        
+        g_orientation_callback(&c_orientation);
+    }
+}
+
+void cpp_pose_polling_function(std::shared_ptr<xv::Slam> slam) {
+    const double prediction = 0.005;
+    xv::Pose pose;
+    long n = 0;
+    long nb_ok = 0;
+
+    while (!g_stop_pose_thread) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+
+        bool ok = slam->getPose(pose, prediction);
+        if (ok) {
+            ++nb_ok;
+            if (g_pose_callback && pose.confidence() > 0) {
+                C_Pose c_pose;
+                c_pose.hostTimestamp = pose.hostTimestamp();
+                c_pose.edgeTimestampUs = pose.edgeTimestampUs();
+                
+                auto pos = pose.translation();
+                memcpy(c_pose.position, pos.data(), sizeof(double) * 3);
+                
+                auto q = pose.quaternion();
+                memcpy(c_pose.quaternion, q.data(), sizeof(double) * 4);
+                
+                c_pose.confidence = pose.confidence();
+                
+                auto linVel = pose.linearVelocity();
+                memcpy(c_pose.linearVelocity, linVel.data(), sizeof(double) * 3);
+                
+                auto angVel = pose.angularVelocity();
+                memcpy(c_pose.angularVelocity, angVel.data(), sizeof(double) * 3);
+                
+                g_pose_callback(&c_pose);
+            }
+        }
+        n++;
+
+        if (n % 1000 == 0) {
+            printf("SLAM pose success rate: %.1f%% (%ld/%ld)\n", 
+                   100.0 * double(nb_ok) / n, nb_ok, n);
+        }
+    }
+}
+
+
+const char* xv_init_and_start_imu(OrientationCallback callback) {
+    printf("Initializing with SlamStartMode::Normal...\n");
+    auto devices = xv::getDevices(10.0, "", nullptr, xv::SlamStartMode::Normal);
+    if (devices.empty()) {
+        printf("No devices found\n");
+        return nullptr;
+    }
+
+    g_device = devices.begin()->second.get();
+    printf("Device found with ID: %s\n", g_device->id().c_str());
+    
+    // Print device info
+    // auto info = g_device->info();
+    // for (const auto& pair : info) {
+    //     printf("Device info - %s: %s\n", pair.first.c_str(), pair.second.c_str());
+    // }
+    
+    // Validate device capabilities
+    if (!g_device->slam()) {
+        printf("Error: SLAM not supported on this device\n");
+        return nullptr;
+    }
+    
+    // if (!g_device->orientationStream()) {
+    //     printf("Error: Orientation stream not supported on this device\n");
+    //     return nullptr;
+    // }
+
+    // Set log level
+    //xv::setLogLevel(xv::LogLevel::info);
+    xv::setLogLevel(xv::LogLevel(1));
+
+    // Configure device
+    // auto* deviceEx = dynamic_cast<xv::DeviceEx*>(g_device);
+    // if (deviceEx) {
+    //     deviceEx->setFeMode(xv::StereoMode::IMAGES_AND_DATA);
+    // }
+
+    printf("Starting orientation stream...\n");
+    if (!g_device->orientationStream()->start()) {
+        printf("Error: Failed to start orientation stream\n");
+        return nullptr;
+    }
+
+    // Register orientation callback
+    g_orientation_callback = callback;
+    g_imu_callback_id = g_device->orientationStream()->registerCallback(cpp_orientation_callback);
+
+    static std::string device_id = g_device->id();
+    return device_id.c_str();
+}
+
+bool xv_stop_imu_start_slam(PoseCallback callback) {
+    if (!g_device) {
+        printf("Error: Device not initialized\n");
+        return false;
+    }
+
+    // Stop IMU/orientation stream
+    // if (g_device->orientationStream()) {
+        g_device->orientationStream()->unregisterCallback(g_imu_callback_id);
+        g_imu_callback_id = -1;
+    // }
+
+    // Setup and start fisheye cameras like demo-api does
+    // if (g_device->fisheyeCameras()) {
+        // Register minimal callback first
+        g_fisheye_callback_id = g_device->fisheyeCameras()->registerCallback(
+            [](xv::FisheyeImages const& images) {});
+            
+        printf("Starting fisheye cameras...\n");
+        if (!g_device->fisheyeCameras()->start()) {
+            printf("Warning: Failed to start fisheye cameras\n");
+        }
+    // } else {
+    //     printf("Warning: No fisheye cameras available\n");
+    // }
+
+    // Get SLAM interface
+    g_slam = g_device->slam();
+    if (!g_slam) {
+        printf("Error: Failed to get SLAM interface\n");
+        return false;
+    }
+
+    printf("Configuring SLAM...\n");
+    
+    // Try to match demo-api configuration
+    // auto* deviceEx = dynamic_cast<xv::DeviceEx*>(g_device);
+    // if (deviceEx) {
+    //     deviceEx->setFeMode(xv::StereoMode::IMAGES_AND_DATA);
+    // }
+
+    // Make sure SLAM is stopped
+    // g_slam->stop();
+    
+    // Try Edge mode first
+    // printf("Starting SLAM in Edge mode...\n");
+    // if (!g_slam->start(xv::Slam::Mode::Edge)) {
+    //     printf("Edge mode failed, trying Mixed mode...\n");
+    //     if (!g_slam->start(xv::Slam::Mode::Mixed)) {
+    //         printf("Error: Failed to start SLAM in any mode\n");
+    //         return false;
+    //     }
+    //     printf("Mixed mode started successfully\n");
+    // } else {
+    //   printf("Edge mode started successfully\n");
+    // }
+
+        if (!g_slam->start(xv::Slam::Mode::Mixed)) {
+            printf("Error: Failed to start SLAM in any mode\n");
+            return false;
+        }
+
+    // Give some time for initialization
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+
+    // Setup pose callback and start pose thread
+    g_pose_callback = callback;
+    g_stop_pose_thread = false;
+
+    g_pose_thread = std::thread(cpp_pose_polling_function, g_slam);
+    return true;
+}
+
+void xv_cleanup() {
+    // Stop pose thread if running
+    if (g_pose_thread.joinable()) {
+        g_stop_pose_thread = true;
+        g_pose_thread.join();
+    }
+
+    // Cleanup SLAM
+    if (g_slam) {
+        g_slam->stop();
+    }
+
+    // Cleanup callbacks
+    if (g_device) {
+        if (g_device->orientationStream()) {
+            g_device->orientationStream()->unregisterCallback(g_imu_callback_id);
+        }
+        if (g_device->fisheyeCameras()) {
+            g_device->fisheyeCameras()->unregisterCallback(g_fisheye_callback_id);
+        }
+    }
+
+    g_device = nullptr;
+    g_slam.reset();
+    g_orientation_callback = nullptr;
+    g_pose_callback = nullptr;
+}
+
+}
+```
+
+`/home/george/nix-expressions/xvisio/xv_sample_program_c.c`:
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <time.h>
+#include <signal.h>
+#include <math.h>
+#include "xv_c_wrapper.h"
+
+static volatile int running = 1;
+
+void print_timestamp() {
+    time_t now;
+    time(&now);
+    struct tm *local = localtime(&now);
+    printf("%04d-%02d-%02d %02d:%02d:%02d ", 
+           local->tm_year + 1900, local->tm_mon + 1, local->tm_mday,
+           local->tm_hour, local->tm_min, local->tm_sec);
+}
+
+void orientation_callback(const C_Orientation* orientation) {
+    //compute time difference from last time this function was called and implied fps
+    static double last_orientation_timestamp = 0.0;
+    double fps = 0.0;
+
+    if (last_orientation_timestamp > 0.0) {
+      double dt = orientation->hostTimestamp - last_orientation_timestamp;
+      if (dt > 0) fps = 1.0 / dt;
+    }
+    
+    //print orientation quaternion with fps
+    print_timestamp();
+    printf("orientation@%.1ffps orientation quaternion=(%f %f %f %f)\n",
+           fps,
+           orientation->quaternion[0], 
+           orientation->quaternion[1],
+           orientation->quaternion[2], 
+           orientation->quaternion[3]);
+    
+    //update function's static var for next iteration
+    last_orientation_timestamp = orientation->hostTimestamp;
+}
+
+void pose_callback(const C_Pose* pose) {
+  // Compute time difference from the last time this function was called and implied fps
+  static double last_pose_timestamp = 0.0;
+  double fps = 0.0;
+  if (last_pose_timestamp > 0.0) {
+      double dt = pose->hostTimestamp - last_pose_timestamp;
+      if (dt > 0) fps = 1.0 / dt;
+  }
+  
+  // Print timestamp, fps, and 6dof values (translation + quaternions)
+  print_timestamp();
+  printf("slam-get-pose p=(%f,%f,%f), Quaternion=(%f,%f,%f,%f), Confidence=%f\n",
+         pose->position[0], pose->position[1], pose->position[2],
+         pose->quaternion[0], pose->quaternion[1], pose->quaternion[2], pose->quaternion[3],
+         pose->confidence);
+  
+  //Uncomment this if you want Euler angles (in degrees) printed instead:
+  /*  
+  // Print timestamp, fps, and 6dof values (translation + Euler angles in terms of degrees)
+  double pitch = asin(2.0 * (pose->quaternion[3] * pose->quaternion[1] - pose->quaternion[2] * pose->quaternion[0])) * 180.0 / M_PI;
+  double yaw = atan2(2.0 * (pose->quaternion[3] * pose->quaternion[2] + pose->quaternion[0] * pose->quaternion[1]), 
+                     1.0 - 2.0 * (pose->quaternion[1] * pose->quaternion[1] + pose->quaternion[2] * pose->quaternion[2])) * 180.0 / M_PI;
+  double roll = atan2(2.0 * (pose->quaternion[3] * pose->quaternion[0] + pose->quaternion[1] * pose->quaternion[2]), 
+                      1.0 - 2.0 * (pose->quaternion[0] * pose->quaternion[0] + pose->quaternion[1] * pose->quaternion[1])) * 180.0 / M_PI;
+  printf("slam-get-pose p=(%f,%f,%f), Euler=(%f,%f,%f), Confidence=%f\n",
+         pose->position[0], pose->position[1], pose->position[2],
+         pitch, yaw, roll,
+         pose->confidence);
+  */
+
+  //Update state for next function call
+  last_pose_timestamp = pose->hostTimestamp;
+}
+
+void sigint_handler(int sig) {
+    running = 0;
+}
+
+int main() {
+  signal(SIGINT, sigint_handler); //If SIGINT/C-c C-C is sent, allows us to gracefully exit without leaving the XR50 in a bind.
+    
+    printf("XVisio SDK Sample Program (C version)\n");
+    
+    printf("Initializing device and starting IMU stream...\n");
+
+    //const char* device_id = xv_init_and_start_imu(orientation_callback);
+    const char* device_id = xv_init_and_start_slam(pose_callback);
+
+    if (device_id == NULL) {
+      printf("Failed to initialize device and start IMU\n");
+      return 1;
+    }
+    
+    printf("Device initialized: %s\n", device_id);
+    
+    while (running) {
+      usleep(100000);
+    }
+    
+    printf("\nCleaning up...\n");
+    xv_cleanup();
+    printf("Done.\n");
+    
+    return 0;
+}
+```
+
+`/home/george/nix-expressions/xvisio/main.cpp`:
+
+```cpp
+#include <iostream>
+#include <cstdint>
+#include <xv-sdk.h>
+
+int main() {
+    std::cout << "Hello, World!" << std::endl;
+    return 0;
+}
+
+```

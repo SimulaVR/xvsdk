@@ -56,8 +56,9 @@ stdenv.mkDerivation rec {
       exit 1
     fi
     
-    mkdir -p $out/include $out/src
+    mkdir -p $out/include $out/src $out/include2
     cp -r usr/include/* $out/include/
+    cp -r usr/include2/* $out/include2/
     cp -r usr/share/xvsdk/* $out/src/
     
     substituteInPlace $out/lib/pkgconfig/xvsdk.pc \
@@ -86,8 +87,11 @@ stdenv.mkDerivation rec {
 
     ln -s ${libjpeg8}/lib/libjpeg.so.8 $out/lib/libjpeg.so.8
 
+cp ${./xv_c_wrapper.h} $out/include/xvsdk/xv_c_wrapper.h
+
 g++ -std=c++11 -shared -fPIC \
   -I$out/include/xvsdk \
+  -I$out/include2 \
   -L$out/lib \
   -L$out/lib/opencv4.2 \
   -L${libjpeg8}/lib \

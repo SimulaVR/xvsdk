@@ -21,8 +21,12 @@ pkgs.stdenv.mkDerivation {
   shellHook = ''
     export LD_LIBRARY_PATH=${xvsdk}/lib:${xvsdk}/lib/opencv4.2:$LD_LIBRARY_PATH
     
-    xvSampleBuildC() {
-      gcc -I${xvsdk}/include -L${xvsdk}/lib -o xv_sample_program_c xv_sample_program_c.c -lxv_c_wrapper -lxvsdk -Wl,-rpath,${xvsdk}/lib:${xvsdk}/lib/opencv4.2
+    xvSampleBuildC () { 
+      gcc -I${xvsdk}/include \
+          -L${xvsdk}/lib \
+          -o xv_sample_program_c xv_sample_program_c.c \
+          -lxv_c_wrapper -lxvsdk -lm \
+          -Wl,-rpath,${xvsdk}/lib:${xvsdk}/lib/opencv4.2
     }
     
     xvSampleBuildCPP() {
