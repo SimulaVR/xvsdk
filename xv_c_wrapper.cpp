@@ -6,6 +6,7 @@
 #include <thread>
 #include "xv_c_wrapper.h"
 
+
 extern "C" {
 
 //Initialize global variables (ugly but for demo)
@@ -20,6 +21,7 @@ static bool g_stop_pose_thread = false;
 
 //Pushes to our C orientation callbackfunction
 void cpp_orientation_callback(const xv::Orientation& orientation) {
+printf("cpp_orientation_callback\n");
     if (g_orientation_callback) {
         C_Orientation c_orientation;
         c_orientation.hostTimestamp = orientation.hostTimestamp;
@@ -34,14 +36,13 @@ void cpp_orientation_callback(const xv::Orientation& orientation) {
 
 //Pushes to our C 6dof callback function
 void cpp_pose_polling_function(std::shared_ptr<xv::Slam> slam) {
+printf("cpp_pose_polling_function\n");
     const double prediction = 0.005;
     xv::Pose pose;
     long n = 0;
     long nb_ok = 0;
 
     while (!g_stop_pose_thread) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(2));
-
         bool ok = slam->getPose(pose, prediction);
         if (ok) {
             ++nb_ok;
@@ -120,7 +121,6 @@ const char* xv_init_and_start_slam(PoseCallback callback) {
 
     g_device = devices.begin()->second.get();
     printf("Device found with ID: %s\n", g_device->id().c_str());
-    
 
     // Get SLAM interface
     g_slam = g_device->slam();
@@ -131,9 +131,10 @@ const char* xv_init_and_start_slam(PoseCallback callback) {
 
     xv::setLogLevel(xv::LogLevel(1));
 
-    //Orientation-only code which might also be needed
+    //Orientation-only code which I thought might be needed
     // for this function to work (due to XR50 xrvsdk
-    // internals I don't understand).
+    // internals I don't understand), but it still doesn't work in
+    // monado calling this so am leaving commented out for now
     /*
     printf("Starting orientation stream...\n");
     if (!g_device->orientationStream()->start()) {
@@ -177,6 +178,7 @@ const char* xv_init_and_start_slam(PoseCallback callback) {
 }
 
 void xv_cleanup() {
+printf("xv_cleanup\n");
     // Stop pose thread if running
     if (g_pose_thread.joinable()) {
         g_stop_pose_thread = true;
@@ -206,3 +208,4 @@ void xv_cleanup() {
 }
 
 }
+
