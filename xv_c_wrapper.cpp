@@ -21,7 +21,6 @@ static bool g_stop_pose_thread = false;
 
 //Pushes to our C orientation callbackfunction
 void cpp_orientation_callback(const xv::Orientation& orientation) {
-printf("cpp_orientation_callback\n");
     if (g_orientation_callback) {
         C_Orientation c_orientation;
         c_orientation.hostTimestamp = orientation.hostTimestamp;
@@ -36,7 +35,6 @@ printf("cpp_orientation_callback\n");
 
 //Pushes to our C 6dof callback function
 void cpp_pose_polling_function(std::shared_ptr<xv::Slam> slam) {
-printf("cpp_pose_polling_function\n");
     const double prediction = 0.005;
     xv::Pose pose;
     long n = 0;
@@ -71,14 +69,12 @@ printf("cpp_pose_polling_function\n");
         n++;
 
         if (n % 1000 == 0) {
-            printf("SLAM pose success rate: %.1f%% (%ld/%ld)\n", 
-                   100.0 * double(nb_ok) / n, nb_ok, n);
+            //printf("SLAM pose success rate: %.1f%% (%ld/%ld)\n", 100.0 * double(nb_ok) / n, nb_ok, n);
         }
     }
 }
 
 const char* xv_init_and_start_imu(OrientationCallback callback) {
-    printf("Initializing with SlamStartMode::Normal...\n");
     auto devices = xv::getDevices(10.0, "", nullptr, xv::SlamStartMode::Normal);
     if (devices.empty()) {
         printf("No devices found\n");
@@ -178,7 +174,6 @@ const char* xv_init_and_start_slam(PoseCallback callback) {
 }
 
 void xv_cleanup() {
-printf("xv_cleanup\n");
     // Stop pose thread if running
     if (g_pose_thread.joinable()) {
         g_stop_pose_thread = true;
